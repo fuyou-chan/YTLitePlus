@@ -55,6 +55,10 @@ jobs:
     permissions:
       contents: write
 
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      LIBUNDIRECT_PATH: ${{ github.workspace }}/libundirect
+
     steps:
       - name: Checkout Main Repository
         uses: actions/checkout@v4
@@ -63,7 +67,7 @@ jobs:
           ref: ${{ github.event.inputs.commit_id || github.ref }}
           submodules: recursive
 
-      - name: Checkout libundirect Repository
+      - name: Checkout libundirect
         uses: actions/checkout@v4
         with:
           repository: fuyou-chan/libundirect
@@ -83,13 +87,15 @@ jobs:
 
       - name: Download iOS SDK
         run: |
-          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks.git
-          cd sdks
+          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks.git sdks_temp
+          cd sdks_temp
           git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
           git checkout
-          mv iPhoneOS${{ inputs.sdk_version }}.sdk ${{ github.workspace }}/theos/sdks/
+          mkdir -p $THEOS/sdks
+          mv iPhoneOS${{ inputs.sdk_version }}.sdk $THEOS/sdks/
+        shell: bash
 
-      - name: Download Theos Jailed
+      - name: Checkout Theos Jailed
         uses: actions/checkout@v4
         with:
           repository: qnblackcat/theos-jailed
@@ -98,12 +104,18 @@ jobs:
           submodules: recursive
 
       - name: Install Theos Jailed
-        run: ./theos-jailed/install
+        run: |
+          if [ -d "theos-jailed" ]; then
+            ./theos-jailed/install
+          else
+            echo "theos-jailed directory not found. Aborting..."
+            exit 1
+          fi
         shell: bash
 
       - name: Build libundirect
         run: |
-          cd libundirect
+          cd $LIBUNDIRECT_PATH
           make clean || true
           make
           mkdir -p $THEOS/lib
@@ -114,26 +126,20 @@ jobs:
 
       - name: Prepare YouTube IPA
         run: |
-          wget "$YOUTUBE_URL" --quiet -O main/YouTube.ipa
+          URL_YT="${{ inputs.decrypted_youtube_url }}"
+          wget "$URL_YT" -O main/YouTube.ipa
           unzip -q main/YouTube.ipa -d main/tmp
-          rm -rf main/tmp/Payload/YouTube.app/_CodeSignature/CodeResources
-          rm -rf main/tmp/Payload/YouTube.app/PlugIns/*
-          
-          python3 - <<'END_PYTHON'
-          import plistlib
-          filepath = 'main/tmp/Payload/YouTube.app/Info.plist'
-          with open(filepath, 'rb') as f:
-              plist = plistlib.load(f)
-          if 'UISupportedDevices' in plist:
-              del plist['UISupportedDevices']
-          with open(filepath, 'wb') as f:
-              plistlib.dump(plist, f)
-          END_PYTHON
-
-          cp -R main/Extensions/*.appex main/tmp/Payload/YouTube.app/PlugIns
-        env:
-          YOUTUBE_URL: ${{ github.event.inputs.decrypted_youtube_url }}
-          THEOS: ${{ github.workspace }}/theos
+          # plistlib を直接 YAML 内で使う
+          python3 - <<EOF
+import plistlib
+fp = 'main/tmp/Payload/YouTube.app/Info.plist'
+with open(fp, 'rb') as f:
+    pl = plistlib.load(f)
+if 'UISupportedDevices' in pl:
+    del pl['UISupportedDevices']
+with open(fp, 'wb') as f:
+    plistlib.dump(pl, f)
+EOF
 
       - name: Build YTLitePlus Package
         run: |
@@ -145,5 +151,11 @@ jobs:
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
         env:
           THEOS: ${{ github.workspace }}/theos
-          BUNDLE_ID: ${{ github.event.inputs.bundle_id }}
-          APP_NAME: ${{ github.event.inputs.app_name }}
+
+      - name: Upload Artifact
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTLitePlus
+          path: main/packages/*.ipa
+          if-no-files-found: error
