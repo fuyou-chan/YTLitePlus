@@ -210,4 +210,41 @@ jobs:
           sed "s/%ytliteplus_version%/${{ env.YTLITE_VERSION }}/g; s/%youtube_version%/5.0.1/g; s/%catbox_url%/${{ env.CATBOX_FILE }}/g; s/%date%/$TODAY/g" \
           main/.github/RELEASE_TEMPLATE/Release.md > ${{ github.workspace }}/release_notes.md
 
-     
+      - name: Create Draft Release
+        if: ${{ inputs.create_release }}
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.YT_VERSION }}-5.0.1
+          name: v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus
+          files: main/packages/*.ipa
+          draft: true
+          body_path: ${{ github.workspace }}/release_notes.md
+
+      - name: Update Altstore Source with latest release
+        if: ${{ inputs.create_release }}
+        run: |
+          curl --location --request POST 'https://api.github.com/repos/Balackburn/YTLitePlusAltstore/dispatches' \
+          --header "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
+          --header 'Content-Type: application/json' \
+          --data-raw '{"event_type": "update-altstore-source-trigger"}'
+
+      - name: Job Summary
+        run: echo -e '### 📺 Build Complete' >> $GITHUB_STEP_SUMMARY
+
+      - name: Job Summary - Artifact Upload
+        if: ${{ inputs.upload_artifact }}
+        run: echo -e '### 📦 Artifact Upload\n\nThe artifact was uploaded successfully!' >> $GITHUB_STEP_SUMMARY
+
+      - name: Job Summary - Catbox Upload
+        if: ${{ inputs.catbox_upload }}
+        run: echo -e "### 🐱 Catbox Upload\n\nThe Catbox upload was successful! $CATBOX_URL" >> $GITHUB_STEP_SUMMARY
+
+      - name: Job Summary - Draft Release
+        if: ${{ inputs.create_release }}
+        run: |
+          REPO_URL="https://github.com/${{ github.repository }}"
+          RELEASES_URL="$REPO_URL/releases"
+          echo -e "### 🚀 Draft Release\n\nView your releases here: $RELEASES_URL" >> $GITHUB_STEP_SUMMARY
