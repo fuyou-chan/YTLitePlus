@@ -114,7 +114,7 @@ jobs:
       - name: Fix Compiling
         run: |
           echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
-          echo 'export PATH="/usr/local/opt/make/libexec/gnubin:$PATH"' >> ~/.bash_profile
+          (echo export PATH="/usr/local/opt/make/libexec/gnubin:$PATH" >> ~/.bash_profile)
           source ~/.bash_profile
 
       - name: Hash YouTube ipa URL
@@ -135,13 +135,15 @@ jobs:
           rm -rf main/tmp/Payload/YouTube.app/PlugIns/*
           python - <<EOF
 import plistlib
+
 def remove_uisupporteddevices(filepath):
-  with open(filepath, 'rb') as f:
-    plist = plistlib.load(f)
-  if 'UISupportedDevices' in plist:
-    del plist['UISupportedDevices']
-  with open(filepath, 'wb') as f:
-    plistlib.dump(plist, f)
+    with open(filepath, 'rb') as f:
+        plist = plistlib.load(f)
+    if 'UISupportedDevices' in plist:
+        del plist['UISupportedDevices']
+    with open(filepath, 'wb') as f:
+        plistlib.dump(plist, f)
+
 filepath = 'main/tmp/Payload/YouTube.app/Info.plist'
 remove_uisupporteddevices(filepath)
 EOF
@@ -220,19 +222,19 @@ EOF
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: "v${{ env.YT_VERSION }}-5.0.1"
-          name: "v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus"
-          files: "main/packages/*.ipa"
+          tag_name: v${{ env.YT_VERSION }}-5.0.1
+          name: v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus
+          files: main/packages/*.ipa
           draft: true
-          body_path: "${{ github.workspace }}/release_notes.md"
+          body_path: ${{ github.workspace }}/release_notes.md
 
       - name: Update Altstore Source with latest release
         if: ${{ inputs.create_release }}
         run: |
           curl --location --request POST 'https://api.github.com/repos/Balackburn/YTLitePlusAltstore/dispatches' \
-            --header "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
-            --header 'Content-Type: application/json' \
-            --data-raw '{"event_type": "update-altstore-source-trigger"}'
+          --header "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
+          --header 'Content-Type: application/json' \
+          --data-raw '{"event_type": "update-altstore-source-trigger"}'
 
       - name: Job Summary
         run: echo -e '### 📺 Build Complete' >> $GITHUB_STEP_SUMMARY
