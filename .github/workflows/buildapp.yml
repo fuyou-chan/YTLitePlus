@@ -5,11 +5,11 @@ on:
     inputs:
       sdk_version:
         description: "iOS SDK Version"
-        default: "16.5"
+        default: "17.5"
         required: true
         type: string
       decrypted_youtube_url:
-        description: "Direct URL of decrypted YouTube ipa"
+        description: "Direct URL of the decrypted YouTube ipa"
         default: ""
         required: true
         type: string
@@ -50,7 +50,11 @@ concurrency:
 
 jobs:
   build:
+    name: Build YTLitePlus
     runs-on: macos-13
+    permissions:
+      contents: write
+
     env:
       THEOS: ${{ github.workspace }}/theos
 
@@ -62,7 +66,7 @@ jobs:
           ref: ${{ github.event.inputs.commit_id || github.ref }}
           submodules: recursive
 
-      - name: Checkout libundirect
+      - name: Checkout libundirect Repository
         uses: actions/checkout@v4
         with:
           repository: fuyou-chan/libundirect
@@ -70,34 +74,55 @@ jobs:
           ref: main
 
       - name: Install Dependencies
-        run: brew install ldid dpkg make git curl unzip
+        run: brew install ldid dpkg make git curl wget unzip
 
       - name: Download Theos
         uses: actions/checkout@v4
         with:
           repository: theos/theos
+          ref: master
           path: theos
           submodules: recursive
 
+      - name: iOS SDK Caching
+        id: SDK
+        uses: actions/cache@v4
+        env:
+          cache-name: iOS-${{ inputs.sdk_version }}-SDK
+        with:
+          path: theos/sdks/
+          key: ${{ env.cache-name }}
+          restore-keys: ${{ env.cache-name }}
+
       - name: Download iOS SDK
+        if: steps.SDK.outputs.cache-hit != 'true'
         run: |
-          mkdir -p sdks
-          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks.git sdks
+          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks.git
           cd sdks
           git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
           git checkout
-          mv *.sdk $THEOS/sdks
+          mv *.sdk $THEOS/sdks/
+        env:
+          THEOS: ${{ env.THEOS }}
 
-      - name: Build libhooker
+      - name: Download Theos Jailed
+        uses: actions/checkout@v4
+        with:
+          repository: qnblackcat/theos-jailed
+          ref: master
+          path: theos-jailed
+          submodules: recursive
+
+      - name: Install Theos Jailed
+        run: ./theos-jailed/install
+        env:
+          THEOS: ${{ env.THEOS }}
+
+      - name: Fix Compiling Environment
         run: |
-          git clone --depth=1 https://github.com/fuyou-chan/libhooker.git libhooker
-          cd libhooker
-          make clean
-          make
-          mkdir -p $THEOS/include/libhooker
-          cp include/libhooker.h $THEOS/include/libhooker/
-          mkdir -p $THEOS/lib
-          cp libhooker.dylib $THEOS/lib/
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+          echo 'export PATH="/usr/local/opt/make/libexec/gnubin:$PATH"' >> ~/.bash_profile
+          source ~/.bash_profile
 
       - name: Build libundirect
         run: |
@@ -115,33 +140,44 @@ jobs:
 
       - name: Prepare YouTube IPA
         run: |
-          wget "$YOUTUBE_URL" -O main/YouTube.ipa
+          wget "$YOUTUBE_URL" --quiet --no-verbose -O main/YouTube.ipa
           unzip -q main/YouTube.ipa -d main/tmp
-          python3 - <<EOF
+          echo "YT_VERSION=$(grep -A 1 '<key>CFBundleVersion</key>' main/tmp/Payload/YouTube.app/Info.plist | grep '<string>' | awk -F'[><]' '{print $3}')" >> $GITHUB_ENV
+          rm -rf main/tmp/Payload/YouTube.app/_CodeSignature/CodeResources
+          rm -rf main/tmp/Payload/YouTube.app/PlugIns/*
+          python3 - <<'EOF'
 import plistlib
-with open('main/tmp/Payload/YouTube.app/Info.plist','rb') as f:
+filepath = 'main/tmp/Payload/YouTube.app/Info.plist'
+with open(filepath, 'rb') as f:
     plist = plistlib.load(f)
-if 'UISupportedDevices' in plist: del plist['UISupportedDevices']
-with open('main/tmp/Payload/YouTube.app/Info.plist','wb') as f:
-    plistlib.dump(plist,f)
+if 'UISupportedDevices' in plist:
+    del plist['UISupportedDevices']
+with open(filepath, 'wb') as f:
+    plistlib.dump(plist, f)
 EOF
           cp -R main/Extensions/*.appex main/tmp/Payload/YouTube.app/PlugIns
         env:
           YOUTUBE_URL: ${{ env.URL_YT }}
+          THEOS: ${{ env.THEOS }}
 
       - name: Build YTLitePlus Package
+        id: build_package
         run: |
           cd main
           sed -i '' "s/^BUNDLE_ID.*$/BUNDLE_ID = ${{ inputs.bundle_id }}/" Makefile
           sed -i '' "s/^DISPLAY_NAME.*$/DISPLAY_NAME = ${{ inputs.app_name }}/" Makefile
+          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${{ env.YT_VERSION }}-5.0.1/" Makefile
           sed -i '' "s/^export TARGET.*$/export TARGET = iphone:clang:${{ inputs.sdk_version }}:14.0/" Makefile
           sed -i '' "s/^export SDK_PATH.*$/export SDK_PATH = \$(THEOS)\/sdks\/iPhoneOS${{ inputs.sdk_version }}.sdk\//" Makefile
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
-          mv packages/$(ls -t packages | head -n1) packages/YTLitePlus_${{ env.YT_VERSION }}.ipa
+          mv "packages/$(ls -t packages | head -n1)" "packages/YTLitePlus_${{ env.YT_VERSION }}_5.0.1.ipa"
+          echo "package=$(ls -t packages | head -n1)" >> $GITHUB_OUTPUT
+        env:
+          THEOS: ${{ env.THEOS }}
 
       - name: Upload Artifact
         if: ${{ inputs.upload_artifact }}
         uses: actions/upload-artifact@v4
         with:
-          name: YTLitePlus
-          path: main/packages/YTLitePlus_${{ env.YT_VERSION }}.ipa
+          name: YTLitePlus_${{ env.YT_VERSION }}
+          path: ${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}
