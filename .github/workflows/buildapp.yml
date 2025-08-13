@@ -55,11 +55,8 @@ jobs:
     permissions:
       contents: write
 
-    env:
-      THEOS: ${{ github.workspace }}/theos
-
     steps:
-      - name: Checkout Main Repository
+      - name: Checkout YTLitePlus Main Repo
         uses: actions/checkout@v4
         with:
           path: main
@@ -67,7 +64,7 @@ jobs:
           submodules: recursive
 
       - name: Install Dependencies
-        run: brew install ldid dpkg make git
+        run: brew install ldid dpkg make
 
       - name: Download Theos
         uses: actions/checkout@v4
@@ -77,7 +74,7 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: iOS SDK Caching
+      - name: Cache iOS SDK
         id: SDK
         uses: actions/cache@v4
         env:
@@ -90,13 +87,14 @@ jobs:
       - name: Download iOS SDK
         if: steps.SDK.outputs.cache-hit != 'true'
         run: |
-          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks/
+          git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks.git sdks
           cd sdks
           git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
           git checkout
-          mv *.sdk $THEOS/sdks
+          mkdir -p $THEOS/sdks
+          mv iPhoneOS${{ inputs.sdk_version }}.sdk $THEOS/sdks/
         env:
-          THEOS: ${{ env.THEOS }}
+          THEOS: ${{ github.workspace }}/theos
 
       - name: Download Theos Jailed
         uses: actions/checkout@v4
@@ -109,33 +107,32 @@ jobs:
       - name: Install Theos Jailed
         run: ./theos-jailed/install
         env:
-          THEOS: ${{ env.THEOS }}
+          THEOS: ${{ github.workspace }}/theos
 
-      - name: Fix Compiling
+      - name: Fix Compiling Path
         run: |
           echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
-          (echo export PATH="/usr/local/opt/make/libexec/gnubin:$PATH" >> ~/.bash_profile)
+          echo 'export PATH="/usr/local/opt/make/libexec/gnubin:$PATH"' >> ~/.bash_profile
           source ~/.bash_profile
 
-      - name: Hash YouTube ipa URL
+      - name: Hash YouTube IPA URL
         run: |
           URL_YT="$(jq -r '.inputs.decrypted_youtube_url' $GITHUB_EVENT_PATH)"
           echo ::add-mask::$URL_YT
           echo URL_YT=$URL_YT >> $GITHUB_ENV
 
-      - name: Prepare YouTube iPA
+      - name: Prepare YouTube IPA
         run: |
           wget "$YOUTUBE_URL" --quiet --no-verbose -O main/YouTube.ipa
           unzip -q main/YouTube.ipa -d main/tmp
           echo "YT_VERSION=$(grep -A 1 '<key>CFBundleVersion</key>' main/tmp/Payload/YouTube.app/Info.plist | grep '<string>' | awk -F'[><]' '{print $3}')" >> $GITHUB_ENV
           wget -qO- https://github.com/dayanch96/YTLite/releases/latest > main/tmp/release_page.html
           YTLITE_VERSION=$(grep -o -E '/tag/v[^"]+' main/tmp/release_page.html | head -n 1 | sed 's/\/tag\/v//')
-          echo "YTLITE_VERSION=5.0.1" >> $GITHUB_ENV
+          echo "YTLITE_VERSION=$YTLITE_VERSION" >> $GITHUB_ENV
           rm -rf main/tmp/Payload/YouTube.app/_CodeSignature/CodeResources
           rm -rf main/tmp/Payload/YouTube.app/PlugIns/*
           python - <<EOF
 import plistlib
-
 def remove_uisupporteddevices(filepath):
     with open(filepath, 'rb') as f:
         plist = plistlib.load(f)
@@ -143,113 +140,50 @@ def remove_uisupporteddevices(filepath):
         del plist['UISupportedDevices']
     with open(filepath, 'wb') as f:
         plistlib.dump(plist, f)
-
 filepath = 'main/tmp/Payload/YouTube.app/Info.plist'
 remove_uisupporteddevices(filepath)
 EOF
           cp -R main/Extensions/*.appex main/tmp/Payload/YouTube.app/PlugIns
         env:
+          THEOS: ${{ github.workspace }}/theos
           YOUTUBE_URL: ${{ env.URL_YT }}
-          THEOS: ${{ env.THEOS }}
 
-      - name: Clone and Build libhooker
+      # === libundirect ソースクローン＆ビルド ===
+      - name: Clone libundirect
         run: |
-          git clone --depth=1 https://github.com/fuyou-chan/libhooker.git libhooker
-          cd libhooker
-          make clean
-          make
-          mkdir -p $THEOS/include/libhooker
-          cp include/libhooker.h $THEOS/include/libhooker/
-          mkdir -p $THEOS/lib
-          cp libhooker.dylib $THEOS/lib/
+          git clone https://github.com/fuyou-chan/libundirect.git libundirect
+        working-directory: ${{ github.workspace }}
 
       - name: Build libundirect
         run: |
+          export THEOS=${{ github.workspace }}/theos
+          export SDKVERSION=${{ inputs.sdk_version }}
+          export IPHONEOS_DEPLOYMENT_TARGET=${SDKVERSION}
+          export TARGET=iphone:clang:${SDKVERSION}
           cd libundirect
           make clean
           make
-        env:
-          THEOS: ${{ env.THEOS }}
+        working-directory: ${{ github.workspace }}
 
-      - name: Build Package
+      # === YTLitePlus ビルド ===
+      - name: Build YTLitePlus Package
         id: build_package
         run: |
           cd main
           sed -i '' "s/^BUNDLE_ID.*$/BUNDLE_ID = ${{ inputs.bundle_id }}/" Makefile
           sed -i '' "s/^DISPLAY_NAME.*$/DISPLAY_NAME = ${{ inputs.app_name }}/" Makefile
-          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${{ env.YT_VERSION }}-5.0.1/" Makefile
+          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${{ env.YT_VERSION }}-${{ env.YTLITE_VERSION }}/" Makefile
           sed -i '' "s/^export TARGET.*$/export TARGET = iphone:clang:${{ inputs.sdk_version }}:14.0/" Makefile
           sed -i '' "s/^export SDK_PATH.*$/export SDK_PATH = \$(THEOS)\/sdks\/iPhoneOS${{ inputs.sdk_version }}.sdk\//" Makefile
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
-          mv "packages/$(ls -t packages | head -n1)" "packages/YTLitePlus_${{ env.YT_VERSION }}_5.0.1.ipa"
-          echo "package=$(ls -t packages | head -n1)" >> $GITHUB_OUTPUT
-          echo -e "==> \033[1mSHASUM256: $(shasum -a 256 packages/*.ipa | cut -f1 -d' ')\033[0m"
-          echo -e "==> \033[1mBundle ID: ${{ inputs.bundle_id }}\033[0m"
+          mv packages/*.deb packages/YTLitePlus_${{ env.YT_VERSION }}_${{ env.YTLITE_VERSION }}.deb
+          echo "package=YTLitePlus_${{ env.YT_VERSION }}_${{ env.YTLITE_VERSION }}.deb" >> $GITHUB_OUTPUT
         env:
-          THEOS: ${{ env.THEOS }}
-          BUNDLE_ID: ${{ inputs.bundle_id }}
-          APP_NAME: ${{ inputs.app_name }}
+          THEOS: ${{ github.workspace }}/theos
 
       - name: Upload Artifact
         if: ${{ inputs.upload_artifact }}
         uses: actions/upload-artifact@v4
         with:
           name: YTLitePlus_${{ env.YT_VERSION }}_${{ env.YTLITE_VERSION }}
-          path: ${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}
-          if-no-files-found: error
-
-      - name: Upload Artifact to Catbox
-        if: ${{ inputs.catbox_upload }}
-        run: |
-          RESPONSE=$(curl -F "reqtype=fileupload" -F "fileToUpload=@${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}" https://catbox.moe/user/api.php)
-          CATBOX_URL=$(echo $RESPONSE | grep -o -E 'https://files.catbox.moe/[^"]*')
-          echo "Uploaded artifact to $CATBOX_URL"
-          CATBOX_FILE=$(echo $CATBOX_URL | sed 's|https://files.catbox.moe/||')
-          echo "CATBOX_FILE=$CATBOX_FILE" >> $GITHUB_ENV
-          echo "CATBOX_URL=$CATBOX_URL" >> $GITHUB_ENV
-
-      - name: Prepare Release Notes
-        if: ${{ inputs.create_release }}
-        run: |
-          export TODAY=$(date '+%Y-%m-%d')
-          sed "s/%ytliteplus_version%/${{ env.YTLITE_VERSION }}/g; s/%youtube_version%/5.0.1/g; s/%catbox_url%/${{ env.CATBOX_FILE }}/g; s/%date%/$TODAY/g" \
-          main/.github/RELEASE_TEMPLATE/Release.md > ${{ github.workspace }}/release_notes.md
-
-      - name: Create Draft Release
-        if: ${{ inputs.create_release }}
-        id: create_release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ env.YT_VERSION }}-5.0.1
-          name: v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus
-          files: main/packages/*.ipa
-          draft: true
-          body_path: ${{ github.workspace }}/release_notes.md
-
-      - name: Update Altstore Source with latest release
-        if: ${{ inputs.create_release }}
-        run: |
-          curl --location --request POST 'https://api.github.com/repos/Balackburn/YTLitePlusAltstore/dispatches' \
-          --header "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
-          --header 'Content-Type: application/json' \
-          --data-raw '{"event_type": "update-altstore-source-trigger"}'
-
-      - name: Job Summary
-        run: echo -e '### 📺 Build Complete' >> $GITHUB_STEP_SUMMARY
-
-      - name: Job Summary - Artifact Upload
-        if: ${{ inputs.upload_artifact }}
-        run: echo -e '### 📦 Artifact Upload\n\nThe artifact was uploaded successfully!' >> $GITHUB_STEP_SUMMARY
-
-      - name: Job Summary - Catbox Upload
-        if: ${{ inputs.catbox_upload }}
-        run: echo -e "### 🐱 Catbox Upload\n\nThe Catbox upload was successful! $CATBOX_URL" >> $GITHUB_STEP_SUMMARY
-
-      - name: Job Summary - Draft Release
-        if: ${{ inputs.create_release }}
-        run: |
-          REPO_URL="https://github.com/${{ github.repository }}"
-          RELEASES_URL="$REPO_URL/releases"
-          echo -e "### 🚀 Draft Release\n\nView your releases here: $RELEASES_URL" >> $GITHUB_STEP_SUMMARY
+          path: main/packages/${{ steps.build_package.outputs.package }}
