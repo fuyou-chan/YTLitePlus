@@ -1,3 +1,5 @@
+name: Build and Release YTLitePlus
+
 on:
   workflow_dispatch:
     inputs:
@@ -148,7 +150,6 @@ EOF
           YOUTUBE_URL: ${{ env.URL_YT }}
           THEOS: ${{ env.THEOS }}
 
-      # === Clone & Build libhooker ===
       - name: Clone and Build libhooker
         run: |
           git clone --depth=1 https://github.com/fuyou-chan/libhooker.git libhooker
@@ -160,7 +161,6 @@ EOF
           mkdir -p $THEOS/lib
           cp libhooker.dylib $THEOS/lib/
 
-      # === Build libundirect with libhooker ===
       - name: Build libundirect
         run: |
           cd libundirect
@@ -169,7 +169,6 @@ EOF
         env:
           THEOS: ${{ env.THEOS }}
 
-      # === Build main YTLitePlus package ===
       - name: Build Package
         id: build_package
         run: |
@@ -252,5 +251,3 @@ EOF
           REPO_URL="https://github.com/${{ github.repository }}"
           RELEASES_URL="$REPO_URL/releases"
           echo -e "### 🚀 Draft Release\n\nView your releases here: $RELEASES_URL" >> $GITHUB_STEP_SUMMARY
-
-      - name: Job Summary - Link to remove GitHub Action runs
