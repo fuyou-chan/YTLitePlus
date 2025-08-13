@@ -136,12 +136,12 @@ jobs:
           python - <<EOF
 import plistlib
 def remove_uisupporteddevices(filepath):
-    with open(filepath, 'rb') as f:
-        plist = plistlib.load(f)
-    if 'UISupportedDevices' in plist:
-        del plist['UISupportedDevices']
-    with open(filepath, 'wb') as f:
-        plistlib.dump(plist, f)
+  with open(filepath, 'rb') as f:
+    plist = plistlib.load(f)
+  if 'UISupportedDevices' in plist:
+    del plist['UISupportedDevices']
+  with open(filepath, 'wb') as f:
+    plistlib.dump(plist, f)
 filepath = 'main/tmp/Payload/YouTube.app/Info.plist'
 remove_uisupporteddevices(filepath)
 EOF
@@ -150,7 +150,6 @@ EOF
           YOUTUBE_URL: ${{ env.URL_YT }}
           THEOS: ${{ env.THEOS }}
 
-      # === Clone and Build libhooker ===
       - name: Clone and Build libhooker
         run: |
           git clone --depth=1 https://github.com/fuyou-chan/libhooker.git libhooker
@@ -162,17 +161,14 @@ EOF
           mkdir -p $THEOS/lib
           cp libhooker.dylib $THEOS/lib/
 
-      # === Clone and Build libundirect ===
-      - name: Clone and Build libundirect
+      - name: Build libundirect
         run: |
-          git clone --depth=1 https://github.com/fuyou-chan/libundirect.git libundirect
           cd libundirect
           make clean
           make
         env:
           THEOS: ${{ env.THEOS }}
 
-      # === Build main YTLitePlus package ===
       - name: Build Package
         id: build_package
         run: |
@@ -224,19 +220,19 @@ EOF
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ env.YT_VERSION }}-5.0.1
-          name: v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus
-          files: main/packages/*.ipa
+          tag_name: "v${{ env.YT_VERSION }}-5.0.1"
+          name: "v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus"
+          files: "main/packages/*.ipa"
           draft: true
-          body_path: ${{ github.workspace }}/release_notes.md
+          body_path: "${{ github.workspace }}/release_notes.md"
 
       - name: Update Altstore Source with latest release
         if: ${{ inputs.create_release }}
         run: |
           curl --location --request POST 'https://api.github.com/repos/Balackburn/YTLitePlusAltstore/dispatches' \
-          --header "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
-          --header 'Content-Type: application/json' \
-          --data-raw '{"event_type": "update-altstore-source-trigger"}'
+            --header "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
+            --header 'Content-Type: application/json' \
+            --data-raw '{"event_type": "update-altstore-source-trigger"}'
 
       - name: Job Summary
         run: echo -e '### 📺 Build Complete' >> $GITHUB_STEP_SUMMARY
