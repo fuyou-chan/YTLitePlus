@@ -23,26 +23,6 @@ on:
         default: "YouTube"
         required: true
         type: string
-      commit_id:
-        description: "(Optional) Commit ID to build at"
-        default: ""
-        required: false
-        type: string
-      upload_artifact:
-        description: "Upload iPA as artifact (Public)"
-        default: true
-        required: false
-        type: boolean
-      catbox_upload:
-        description: "Upload iPA to Catbox.moe (URL)"
-        default: false
-        required: false
-        type: boolean
-      create_release:
-        description: "Create a draft release (Private)"
-        default: false
-        required: false
-        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -50,28 +30,24 @@ concurrency:
 
 jobs:
   build:
-    name: Build YTLitePlus
     runs-on: macos-13
-    permissions:
-      contents: write
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      SDK_VERSION: ${{ github.event.inputs.sdk_version }}
+      BUNDLE_ID: ${{ github.event.inputs.bundle_id }}
+      APP_NAME: ${{ github.event.inputs.app_name }}
+      YOUTUBE_URL: ${{ github.event.inputs.decrypted_youtube_url }}
 
     steps:
       - name: Checkout Main Repository
         uses: actions/checkout@v4
         with:
           path: main
-          ref: ${{ github.event.inputs.commit_id || github.ref }}
           submodules: recursive
 
-      - name: Checkout libundirect Repository
-        uses: actions/checkout@v4
-        with:
-          repository: fuyou-chan/libundirect
-          path: libundirect
-          ref: main
-
       - name: Install Dependencies
-        run: brew install ldid dpkg make
+        run: |
+          brew install ldid dpkg make wget unzip
 
       - name: Download Theos
         uses: actions/checkout@v4
@@ -84,36 +60,19 @@ jobs:
       - name: iOS SDK Caching
         id: SDK
         uses: actions/cache@v4
-        env:
-          cache-name: iOS-${{ inputs.sdk_version }}-SDK
         with:
           path: theos/sdks/
-          key: ${{ env.cache-name }}
-          restore-keys: ${{ env.cache-name }}
+          key: iOS-${{ env.SDK_VERSION }}
+          restore-keys: iOS-
 
       - name: Download iOS SDK
         if: steps.SDK.outputs.cache-hit != 'true'
         run: |
-          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks/
+          git clone -n --depth=1 --filter=tree:0 https://github.com/aricloverALT/sdks
           cd sdks
-          git sparse-checkout set --no-cone iPhoneOS${{ inputs.sdk_version }}.sdk
+          git sparse-checkout set --no-cone iPhoneOS${{ env.SDK_VERSION }}.sdk
           git checkout
           mv *.sdk $THEOS/sdks
-        env:
-          THEOS: ${{ github.workspace }}/theos
-
-      - name: Download Theos Jailed
-        uses: actions/checkout@v4
-        with:
-          repository: qnblackcat/theos-jailed
-          ref: master
-          path: theos-jailed
-          submodules: recursive
-
-      - name: Install Theos Jailed
-        run: ./theos-jailed/install
-        env:
-          THEOS: ${{ github.workspace }}/theos
 
       - name: Build libundirect
         run: |
@@ -123,62 +82,20 @@ jobs:
           mkdir -p $THEOS/lib
           cp ./libundirect.dylib $THEOS/lib/
           cp ./libundirect.tbd $THEOS/lib/ || true
-          ls -l $THEOS/lib
-        env:
-          THEOS: ${{ github.workspace }}/theos
 
       - name: Prepare YouTube IPA
         run: |
-          wget "$YOUTUBE_URL" --quiet --no-verbose -O main/YouTube.ipa
+          wget "$YOUTUBE_URL" -O main/YouTube.ipa
           unzip -q main/YouTube.ipa -d main/tmp
-          rm -rf main/tmp/Payload/YouTube.app/_CodeSignature/CodeResources
-          rm -rf main/tmp/Payload/YouTube.app/PlugIns/*
-          # --- Python を YAML 内に直接記述 ---
-          python3 - <<'EOF'
+          python3 - <<EOF
 import plistlib
+def remove_uisupporteddevices(filepath):
+    with open(filepath, 'rb') as f:
+        plist = plistlib.load(f)
+    if 'UISupportedDevices' in plist:
+        del plist['UISupportedDevices']
+    with open(filepath, 'wb') as f:
+        plistlib.dump(plist, f)
 filepath = 'main/tmp/Payload/YouTube.app/Info.plist'
-with open(filepath, 'rb') as f:
-    plist = plistlib.load(f)
-if 'UISupportedDevices' in plist:
-    del plist['UISupportedDevices']
-with open(filepath, 'wb') as f:
-    plistlib.dump(plist, f)
+remove_uisupporteddevices(filepath)
 EOF
-          cp -R main/Extensions/*.appex main/tmp/Payload/YouTube.app/PlugIns
-        env:
-          YOUTUBE_URL: ${{ github.event.inputs.decrypted_youtube_url }}
-
-      - name: Build YTLitePlus Package
-        id: build_package
-        run: |
-          cd ${{ github.workspace }}/main
-          sed -i '' "s/^BUNDLE_ID.*$/BUNDLE_ID = ${{ inputs.bundle_id }}/" Makefile
-          sed -i '' "s/^DISPLAY_NAME.*$/DISPLAY_NAME = ${{ inputs.app_name }}/" Makefile
-          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${{ env.YT_VERSION }}-5.0.1/" Makefile
-          sed -i '' "s/^export TARGET.*$/export TARGET = iphone:clang:${{ inputs.sdk_version }}:14.0/" Makefile
-          sed -i '' "s/^export SDK_PATH.*$/export SDK_PATH = \$(THEOS)\/sdks\/iPhoneOS${{ inputs.sdk_version }}.sdk\//" Makefile
-          make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
-          mv "packages/$(ls -t packages | head -n1)" "packages/YTLitePlus_${{ env.YT_VERSION }}_5.0.1.ipa"
-          echo "package=$(ls -t packages | head -n1)" >> $GITHUB_OUTPUT
-        env:
-          THEOS: ${{ github.workspace }}/theos
-          BUNDLE_ID: ${{ inputs.bundle_id }}
-          APP_NAME: ${{ inputs.app_name }}
-
-      - name: Upload Artifact
-        if: ${{ inputs.upload_artifact }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: YTLitePlus_${{ env.YT_VERSION }}_5.0.1
-          path: ${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}
-          if-no-files-found: error
-
-      - name: Upload Artifact to Catbox
-        if: ${{ inputs.catbox_upload }}
-        run: |
-          RESPONSE=$(curl -F "reqtype=fileupload" -F "fileToUpload=@${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}" https://catbox.moe/user/api.php)
-          CATBOX_URL=$(echo $RESPONSE | grep -o -E 'https://files.catbox.moe/[^"]*')
-          echo "Uploaded artifact to $CATBOX_URL"
-          CATBOX_FILE=$(echo $CATBOX_URL | sed 's|https://files.catbox.moe/||')
-          echo "CATBOX_FILE=$CATBOX_FILE" >> $GITHUB_ENV
-          echo "CATBOX_URL=$CATBOX_URL" >> $GITHUB_ENV
